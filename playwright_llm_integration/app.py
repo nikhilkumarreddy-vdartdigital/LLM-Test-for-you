@@ -216,7 +216,7 @@ with tab2:
 
                         st.success("✅ Test execution completed!")
                         st.markdown("**Execution Result:**")
-                        st.json(execution_result.structured_output)
+                        st.code(execution_result.structured_output,language="python")
 
                         st.session_state.execution_results.append({
                             "test_index": test_idx,
