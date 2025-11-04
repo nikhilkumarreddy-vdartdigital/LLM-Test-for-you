@@ -1,10 +1,13 @@
 import os
+import platform
 import sys
 import asyncio
 import streamlit as st
 from datetime import datetime
 import json
 
+if platform.system() == "Windows":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 sys.path.extend([os.path.abspath('.'), os.getcwd()])
 
@@ -13,9 +16,22 @@ from playwright_llm_integration.agents import (
     execute_the_test_case_using_browser_use,
     page_exploration_agent
 )
-from playwright_llm_integration.utils import run_coro, STREAMLIT_CSS
-
+from playwright_llm_integration.utils import STREAMLIT_CSS, AsyncRunner
 from playwright_llm_integration.models import TestSuite
+
+
+
+
+# Initialize global async runner
+@st.cache_resource
+def get_async_runner():
+    """Get or create the global async runner."""
+    return AsyncRunner()
+
+
+# ============================================================================
+# STREAMLIT APP
+# ============================================================================
 
 # Page configuration
 st.set_page_config(
@@ -37,6 +53,9 @@ if 'execution_results' not in st.session_state:
     st.session_state.execution_results = []
 if "exploration_final_json" not in st.session_state:
     st.session_state.exploration_final_json = None
+
+# Get async runner
+async_runner = get_async_runner()
 
 # Main title
 st.markdown('<div class="main-header">🤖 AI-Powered Test Automation Suite</div>', unsafe_allow_html=True)
@@ -82,7 +101,6 @@ tab1, tab2, tab3 = st.tabs([
     "📊 Results & Reports"
 ])
 
-
 # Tab 1: Page Exploration & Test Suite Generation (Combined)
 with tab1:
     st.header("Page Exploration & Test Suite Generation")
@@ -104,7 +122,7 @@ with tab1:
             # Step 1: Exploration
             with st.spinner("🔍 Step 1/2: Exploring the page... This may take a moment."):
                 try:
-                    exploration_result = run_coro(
+                    exploration_result = async_runner.run(
                         page_exploration_agent(base_url, test_description)
                     )
                     st.session_state.exploration_result = exploration_result.final_result()
@@ -112,12 +130,13 @@ with tab1:
                     st.success("✅ Page exploration completed successfully!")
                 except Exception as e:
                     st.error(f"❌ Error during exploration: {str(e)}")
+                    st.exception(e)
                     st.stop()
 
             # Step 2: Test Suite Generation
             with st.spinner("🧪 Step 2/2: Generating test suite... This may take a minute."):
                 try:
-                    test_suite = run_coro(
+                    test_suite = async_runner.run(
                         test_suite_generation_agent(base_url, st.session_state.exploration_result)
                     )
                     st.session_state.test_suite = test_suite
@@ -125,6 +144,7 @@ with tab1:
                     st.balloons()
                 except Exception as e:
                     st.error(f"❌ Error during test suite generation: {str(e)}")
+                    st.exception(e)
                     st.stop()
 
             st.rerun()
@@ -209,14 +229,13 @@ with tab2:
 
                     try:
                         with st.spinner("🌐 Launching browser and executing test..."):
-                            execution_result = run_coro(
+                            execution_result = async_runner.run(
                                 execute_the_test_case_using_browser_use(test_case)
                             )
 
-
                         st.success("✅ Test execution completed!")
                         st.markdown("**Execution Result:**")
-                        st.code(execution_result.structured_output,language="python")
+                        st.code(execution_result.structured_output, language="python")
 
                         st.session_state.execution_results.append({
                             "test_index": test_idx,
@@ -228,6 +247,7 @@ with tab2:
 
                     except Exception as e:
                         st.error(f"❌ Test execution failed: {str(e)}")
+                        st.exception(e)
                         st.session_state.execution_results.append({
                             "test_index": test_idx,
                             "test_title": test_case.test_title,
@@ -273,7 +293,7 @@ with tab3:
 
                 if result["status"] == "passed":
                     st.markdown("**Result:**")
-                    st.json(result.get("result", {}))
+                    st.code(result.get("result", "No result available"), language="python")
                 else:
                     st.markdown("**Error:**")
                     st.error(result.get("error", "Unknown error"))
@@ -287,7 +307,7 @@ with tab3:
         with col1:
             st.download_button(
                 label="📥 Download Results (JSON)",
-                data=json.dumps({"test_results":st.session_state.execution_results}, indent=4),
+                data=json.dumps({"test_results": st.session_state.execution_results}, indent=4),
                 file_name=f"test_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json",
                 use_container_width=True

@@ -1,3 +1,5 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict
 
 import instructor
@@ -57,29 +59,57 @@ STREAMLIT_CSS = """
     }
 </style>
 """
+import asyncio
+import platform
+from typing import Any
 
-def run_coro(coro):
-    """
-    Run an async coroutine from synchronous code safely.
-    Uses asyncio.run where possible, falls back to creating a temporary event loop
-    and performs shutdown of async generators to avoid unclosed transport warnings.
-    """
-    # Set the event loop policy for Windows compatibility
-    import platform
-    if platform.system() == "Windows":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+# ============================================================================
+# ASYNC RUNNER - Handles async operations in a dedicated thread
+# ============================================================================
 
-    try:
-        current_loop = asyncio.get_event_loop() or asyncio.ProactorEventLoop()
-        asyncio.set_event_loop(current_loop)
-    except RuntimeError:
-        current_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(current_loop)
-    try:
-        return current_loop.run_until_complete(coro)
-    finally:
-        # Properly shutdown async generators to avoid warnings
-        current_loop.run_until_complete(current_loop.shutdown_asyncgens())
-        # Close the loop if it was newly created
-        if not asyncio.get_event_loop().is_running():
-            current_loop.close()
+class AsyncRunner:
+    """
+    Manages async operations in a dedicated thread with a persistent event loop.
+    This prevents event loop conflicts in Streamlit's synchronous environment.
+    """
+
+    def __init__(self):
+        self._loop = None
+        self._thread = None
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._setup_loop()
+
+    def _setup_loop(self):
+        """Initialize event loop in a dedicated thread."""
+
+        def run_loop():
+            if platform.system() == "Windows":
+                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_forever()
+
+        self._thread = threading.Thread(target=run_loop, daemon=True)
+        self._thread.start()
+
+        # Wait for loop to be ready
+        import time
+        while self._loop is None:
+            time.sleep(0.01)
+
+    def run(self, coro):
+        """Run a coroutine and return the result."""
+        if self._loop is None or not self._loop.is_running():
+            raise RuntimeError("Event loop is not running")
+
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result()
+
+    def cleanup(self):
+        """Clean up the event loop and thread."""
+        if self._loop:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._thread:
+            self._thread.join(timeout=5)
+        self._executor.shutdown(wait=True)

@@ -58,6 +58,9 @@ Provide a detailed execution report including:
 - Actual results at each step
 - Any issues encountered
 - Screenshots or evidence where relevant
+
+Return the execution report in a structured format in markdown in the final output
+note: File outputs are not supported in this environment. Its only for your understanding.
 """
 
 
